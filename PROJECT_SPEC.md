@@ -71,7 +71,7 @@ The intended system therefore combines three distinct capabilities:
 
 ## 1.3 Problem statement
 
-Basic image classifiers often force every input into one of their known output classes. If a classifier has been trained on cats, dogs, lions, tigers, leopards, and wolves, an uploaded bear image may still be labelled as one of those six classes.
+Basic image classifiers often force every input into one of their known output classes. If a classifier has been trained on domestic cats and dogs, lions, tigers, leopards, gray wolves, cheetahs, and jaguars, an uploaded bear image may still be labelled as one of those eight classes.
 
 This project aims to make that limitation visible and provide a controlled feedback process. The system should be able to abstain when an image is not confidently recognised, let a user identify an unsupported animal through a separate taxonomy catalogue, and preserve the correction for later review.
 
@@ -147,14 +147,16 @@ Do not assume CUDA is installed correctly merely because an NVIDIA GPU exists. T
 
 ## 3.1 Initial model classes
 
-The first image classifier should support these six user-facing categories:
+The first image classifier should support these eight user-facing categories:
 
-1. Domestic cat
-2. Domestic dog
+1. Domestic Cat
+2. Domestic Dog
 3. Lion
 4. Tiger
 5. Leopard
 6. Gray wolf
+7. Cheetah
+8. Jaguar
 
 The label-to-taxonomy mapping must be stored in configuration or model metadata, not duplicated as hard-coded assumptions throughout the code.
 
@@ -162,12 +164,14 @@ Candidate scientific-name mappings are:
 
 | Display label | Candidate scientific taxon | Notes |
 |---|---|---|
-| Domestic cat | *Felis catus* | A domestic species; breed-level prediction is out of scope. |
-| Domestic dog | *Canis lupus familiaris* or the accepted equivalent in the chosen taxonomy source | Taxonomic backbones may represent domestic dogs differently. Use the selected backbone's accepted record. |
+| Domestic Cat | *Felis catus* | A domestic species; breed-level prediction is out of scope. |
+| Domestic Dog | *Canis lupus familiaris* or the accepted equivalent in the chosen taxonomy source | Taxonomic backbones may represent domestic dogs differently. Use the selected backbone's accepted record. |
 | Lion | *Panthera leo* | Species-level category. |
 | Tiger | *Panthera tigris* | Species-level category. |
 | Leopard | *Panthera pardus* | Species-level category. |
 | Gray wolf | *Canis lupus* | Use the intended gray-wolf record from the selected taxonomy backbone. |
+| Cheetah | *Acinonyx jubatus* | Species-level category. |
+| Jaguar | *Panthera onca* | Species-level category. |
 
 Do not invent or hard-code external taxonomy identifiers. Resolve the canonical identifiers from the chosen, versioned taxonomy source and save the source namespace and identifier together.
 
@@ -175,7 +179,7 @@ Do not invent or hard-code external taxonomy identifiers. Resolve the canonical 
 
 - Cat and dog images may include different breeds, ages, coat colours, poses, and backgrounds, but the output remains the broad domestic-cat or domestic-dog category.
 - The wildlife classes should represent the intended species, not merely visually similar animals.
-- Images with multiple animals, no animal, severe obstruction, or an animal outside the six supported classes should be treated as difficult or unsupported inputs, not silently assigned a reliable label.
+- Images with multiple animals, no animal, severe obstruction, or an animal outside the eight supported classes should be treated as difficult or unsupported inputs, not silently assigned a reliable label.
 - The MVP is a single-primary-animal image classifier, not an object detector.
 
 ## 3.3 Taxonomy entries are not model classes
@@ -426,6 +430,8 @@ data/
     tiger/
     leopard/
     wolf/
+    cheetah/
+    jaguar/
   processed/
     train/
     validation/
@@ -510,7 +516,7 @@ Use Python with PyTorch and Torchvision. Keep training, inference, and evaluatio
 
 ## 7.2 Baseline model: CNN from scratch
 
-Implement a compact convolutional neural network trained from random initialisation on the prepared six-class dataset.
+Implement a compact convolutional neural network trained from random initialisation on the prepared eight-class dataset.
 
 The model should include a reasonable sequence of convolution, activation, pooling, and classification layers. Dropout or other regularisation may be used where justified.
 
@@ -525,7 +531,7 @@ Implement ResNet18 using Torchvision pretrained ImageNet weights, subject to the
 Initial strategy:
 
 1. Load the specified pretrained weights.
-2. Replace the final classification layer with a six-output layer.
+2. Replace the final classification layer with an eight-output layer.
 3. Freeze the backbone initially and train the new classifier.
 4. Optionally unfreeze selected or all backbone layers for fine-tuning.
 5. Use validation performance to guide model selection.
@@ -748,7 +754,7 @@ A record being `verified` makes it eligible for curation; it does not bypass dup
 
 ## 10.2 Adding an unsupported species
 
-Example: users upload bear images while the model only supports the original six categories.
+Example: users upload bear images while the model only supports the original eight categories.
 
 Expected process:
 
@@ -1023,7 +1029,7 @@ Test complete paths such as:
 - Confirm that the test set is not used by the training loop.
 - Confirm that class-to-index mapping is stable and stored with the checkpoint.
 - Confirm that evaluation metrics are computed from actual model predictions.
-- Confirm that unsupported-input evaluation is separate from ordinary six-class test accuracy.
+- Confirm that unsupported-input evaluation is separate from ordinary eight-class test accuracy.
 
 ## 15.4 Manual testing
 
@@ -1031,7 +1037,7 @@ Test at least:
 
 - Clear image of each supported animal.
 - Unusual pose or lighting for supported animals.
-- Bear and hippopotamus images as unsupported examples.
+- Bear and hippopotamus images as unsupported examples; test clear images of all eight supported classes.
 - Non-animal images.
 - Blurry or partially obstructed images.
 - Multiple-animal images.
@@ -1273,7 +1279,7 @@ The MVP is considered functionally complete only when all applicable criteria be
 
 ### Data and model
 
-- [ ] The six initial animal categories are represented by documented, correctly mapped labels.
+- [ ] The eight initial animal categories are represented by documented, correctly mapped labels.
 - [ ] The data pipeline validates images and records rejected files.
 - [ ] Train, validation, and test splits are reproducible and checked for leakage.
 - [ ] A scratch CNN trains and saves a usable checkpoint.
@@ -1423,7 +1429,7 @@ The following are deliberate open decisions. Copilot should analyse and recommen
 
 1. **Taxonomy source:** Choose the initial provider/snapshot after reviewing coverage, format, licence, and available common names/synonyms.
 2. **Database:** Confirm SQLite for the local MVP and define a migration strategy.
-3. **Dataset composition:** Confirm actual sources and counts for lion, tiger, leopard, and wolf; do not assume the chosen sources provide balanced data.
+3. **Dataset composition:** Confirm actual sources and counts for lion, tiger, leopard, gray wolf, cheetah, and jaguar; do not assume the chosen sources provide balanced data.
 4. **Dog taxonomy record:** Confirm the accepted dog record used by the selected taxonomy backbone.
 5. **Abstention method:** Start with a measurable baseline and decide whether a more advanced open-set method is feasible.
 6. **Review authority:** Define who can mark a correction as verified in the college-project setting.
