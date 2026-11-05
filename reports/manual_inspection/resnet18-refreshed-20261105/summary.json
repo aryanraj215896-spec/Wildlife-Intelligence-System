@@ -1,0 +1,87 @@
+{
+  "model_version": "resnet18-20261104T223635Z",
+  "architecture": "resnet18",
+  "split": "test",
+  "manifest_sha256": "c8e633e6b0056aabc3436c3114a2c7737fe9b53c436cc5d568103bd1b60aa7a6",
+  "existing_report_sample_count": 2471,
+  "available_test_sample_count": 2470,
+  "test_images_missing_from_disk": 1,
+  "missing_target_class_files_all_splits": 16,
+  "available_confusion_matches_report_except_missing_jaguar_test_row": true,
+  "target_dataset_counts_in_manifest": {
+    "Cheetah": 1375,
+    "Jaguar": 891,
+    "Leopard": 1345
+  },
+  "target_class_test_misclassifications_available": {
+    "Cheetah": 17,
+    "Jaguar": 7,
+    "Leopard": 34
+  },
+  "available_target_class_misclassifications": 58,
+  "other_actual_classes_predicted_as_target_available": {
+    "Cheetah": 7,
+    "Leopard": 8
+  },
+  "incoming_false_positives_available": 15,
+  "target_images_scanned_for_duplicates": 3611,
+  "current_exact_duplicate_groups": 0,
+  "current_exact_duplicate_pairs": 0,
+  "dhash_candidate_pairs_distance_le_3": 13,
+  "dhash_method": "heuristic only; candidate pairs are not confirmed duplicates",
+  "device": "cuda",
+  "exports": [
+    "exact_duplicate_pairs.csv",
+    "manifest_images_missing_on_disk.csv",
+    "misclassified_cheetah.jpg",
+    "misclassified_jaguar.jpg",
+    "misclassified_leopard.jpg",
+    "near_duplicate_candidate_images.jpg",
+    "near_duplicate_candidates_dhash_le3.csv",
+    "other_classes_predicted_as_targets.csv",
+    "other_classes_predicted_as_targets.jpg",
+    "target_class_misclassifications.csv"
+  ],
+  "target_valid_manifest_rows": {
+    "Cheetah": 1375,
+    "Jaguar": 900,
+    "Leopard": 1345
+  },
+  "unique_target_manifest_paths": 3620,
+  "duplicate_manifest_path_rows": 0,
+  "unique_missing_target_paths": 14,
+  "missing_by_class_split": {
+    "Jaguar / train": 12,
+    "Jaguar / test": 2,
+    "Jaguar / validation": 1,
+    "Cheetah / test": 1
+  },
+  "present_files_sha256_mismatch": 0,
+  "present_target_files": 3604,
+  "dhash_candidate_pairs": 13,
+  "cross_split_dhash_candidates": 7,
+  "visual_review_flags": 14,
+  "latest_presence_scan_local_time": "2026-11-05T06:19:43+05:30",
+  "latest_missing_target_manifest_paths": 15,
+  "latest_missing_target_by_class_split": {
+    "Jaguar / train": 12,
+    "Jaguar / test": 2,
+    "Jaguar / validation": 1
+  },
+  "latest_present_target_paths": 3605,
+  "warning": "Target data changed during this audit. The original Jaguar inventory found 15 missing manifest paths; final export verification also found this previously available Cheetah test image absent. No source image was removed, moved, or edited by this task; no missing prediction was inferred.",
+  "target_manifest_counts": {
+    "Cheetah": 1375,
+    "Jaguar": 900,
+    "Leopard": 1345
+  },
+  "target_files_present_at_latest_scan": {
+    "Cheetah": 1375,
+    "Jaguar": 885,
+    "Leopard": 1345
+  },
+  "manifest_sha256_at_final_check": "c8e633e6b0056aabc3436c3114a2c7737fe9b53c436cc5d568103bd1b60aa7a6",
+  "additional_missing_export_paths_at_final_verification": [
+    "C:\\Users\\vinee\\.copilot\\repos\\copilot-worktrees\\Wildlife-Intelligence-System\\vineetshekhar61-fictional-meme\\data\\raw\\Cheetah\\4BZBG0RFB916.jpg"
+  ]
+}
