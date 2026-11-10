@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 def main() -> None:
     try:
-        from wildlife_ai.streamlit_app import main as run_app
+        from src.wildlife_ai.streamlit_app import main as run_app
     except ModuleNotFoundError as exc:
         if exc.name not in {"torch", "torchvision"}:
             raise
