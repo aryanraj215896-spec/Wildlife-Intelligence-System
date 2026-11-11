@@ -144,15 +144,15 @@ These are illustrative individual examples, not estimates of typical behavior. S
 
 The audited worktree app was started using the project `.venv` at `http://127.0.0.1:8502`; its Streamlit health endpoint returned HTTP 200. Classify, Taxonomy, Review, and Models were navigated in the live browser without runtime exceptions. The frontend now uses a responsive wildlife-themed visual style, consistent page hierarchy and navigation, light-theme contrast for widget labels and controls, clear candidate/result layouts, and styled upload, alert, card, button, and table surfaces.
 
-Classify separates production inference from explicit local development/demo mode. The demo lists only registered candidates, validates artifact path and SHA-256, marks outputs experimental, and suppresses feedback submission. It cannot change the production active-model pointer. The current local SQLite database contains three candidate models (two refreshed versions and one earlier ResNet18), no active model, and no promotion policies. All three checkpoint files and recorded hashes were verified. Production promotion was not attempted because numerical acceptance/regression criteria must be approved before candidate evaluation; none were supplied.
+Classify separates production inference from explicit local development/demo mode. The demo lists only registered candidates, validates artifact path and SHA-256, and marks outputs experimental. It accepts candidate-linked feedback for later review but cannot change the production active-model pointer. The current local SQLite database contains three candidate models, no active model, and no promotion policies. Production promotion was not attempted because numerical acceptance/regression criteria must be approved before candidate evaluation; none were supplied.
 
-The app's Taxonomy and Review pages accurately reflect the live database's empty taxonomy and feedback state. A separate isolated AppTest fixture exercised taxonomy import/search/confirmation, checkpoint registration through the Models page, ResNet18 candidate inference and Grad-CAM, the Models-page promotion form under a synthetic test policy, consented feedback submission, reviewer quality/rights approval, and eligible curation export; its synthetic records and promotion state did not touch the live database.
+The app's Taxonomy and Review pages accurately reflect the live database's empty taxonomy and feedback state. Isolated tests exercise candidate-linked direct-class feedback, review, and curation without requiring taxonomy data; a separate taxonomy test continues to cover name import/search/confirmation. Synthetic records and promotion state do not touch the live database.
 
 ## Verification
 
-- Full test suite after the functionality audit and frontend changes: **37 passed**.
+- Full test suite after the direct-class feedback changes: **38 passed**.
 - Streamlit `AppTest` exercised candidate selection, image upload, inference, predicted label, uncalibrated score, alternatives, and experimental labeling. Feedback controls are absent in demo mode.
-- Streamlit `AppTest` exercised an isolated taxonomy → candidate registration → ResNet18 classification/Grad-CAM → Models-page promotion → feedback → review → curation flow and verified the UI output, active pointer and exported manifest in the temporary project only. This does not activate or approve any live candidate.
+- Streamlit `AppTest` exercises an isolated taxonomy → candidate registration → ResNet18 classification/Grad-CAM → candidate-linked direct-class feedback → review → curation flow and verifies the exported manifest in the temporary project only. This does not activate or approve any live candidate.
 - Python source compilation: passed.
 - Streamlit live health endpoint: HTTP 200.
 - Live browser navigation: Classify, Taxonomy, Review, and Models pages rendered without runtime exceptions.

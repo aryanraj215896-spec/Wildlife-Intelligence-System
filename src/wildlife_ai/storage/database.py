@@ -121,6 +121,8 @@ CREATE TABLE feedback (
     submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     response TEXT NOT NULL CHECK(response IN ('yes', 'no', 'unsure', 'unsupported')),
     predicted_label TEXT NOT NULL,
+    corrected_label TEXT NOT NULL DEFAULT '',
+    image_sha256 TEXT NOT NULL DEFAULT '',
     predicted_taxon_version_id TEXT REFERENCES taxa(taxon_version_id),
     model_version_id TEXT REFERENCES model_versions(model_version_id),
     model_score REAL,
@@ -265,6 +267,71 @@ def connect_database(path: str | Path) -> sqlite3.Connection:
                    )"""
             )
             connection.execute("INSERT INTO schema_migrations(version) VALUES (3)")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        version = 3
+    if version < 4:
+        connection.execute("BEGIN EXCLUSIVE")
+        try:
+            _ensure_column(
+                connection,
+                "feedback",
+                "corrected_label",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            _ensure_column(
+                connection,
+                "feedback",
+                "image_sha256",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            feedback_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(feedback)")
+            }
+            if {"response", "predicted_label"} <= feedback_columns:
+                connection.execute(
+                    """UPDATE feedback SET corrected_label = predicted_label
+                       WHERE response = 'yes' AND corrected_label = ''"""
+                )
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (4)")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        version = 4
+    if version < 5:
+        connection.execute("BEGIN EXCLUSIVE")
+        try:
+            connection.execute(
+                """CREATE TABLE application_model_selection (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    model_version_id TEXT NOT NULL REFERENCES model_versions(model_version_id),
+                    validation_report_path TEXT NOT NULL,
+                    validation_report_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE automatic_training_batches (
+                    batch_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL CHECK(status IN ('running', 'accepted', 'rejected', 'failed')),
+                    candidate_model_version_id TEXT REFERENCES model_versions(model_version_id),
+                    evaluation_json TEXT NOT NULL DEFAULT '{}',
+                    message TEXT NOT NULL DEFAULT '',
+                    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TEXT
+                )"""
+            )
+            connection.execute(
+                """CREATE TABLE automatic_training_batch_feedback (
+                    batch_id TEXT NOT NULL REFERENCES automatic_training_batches(batch_id),
+                    feedback_id TEXT NOT NULL UNIQUE REFERENCES feedback(feedback_id),
+                    PRIMARY KEY(batch_id, feedback_id)
+                )"""
+            )
+            connection.execute("INSERT INTO schema_migrations(version) VALUES (5)")
             connection.commit()
         except Exception:
             connection.rollback()

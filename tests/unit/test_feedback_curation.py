@@ -21,7 +21,6 @@ from wildlife_ai.feedback.service import (
     withdraw_training_consent,
 )
 from wildlife_ai.storage.database import connect_database
-from wildlife_ai.taxonomy.importer import import_taxonomy_csv
 
 
 def _image_bytes(color: tuple[int, int, int] = (12, 34, 56)) -> bytes:
@@ -30,52 +29,27 @@ def _image_bytes(color: tuple[int, int, int] = (12, 34, 56)) -> bytes:
     return output.getvalue()
 
 
-def _setup_project(tmp_path: Path) -> tuple[Path, Path, str]:
+def _setup_project(tmp_path: Path) -> tuple[Path, Path]:
     project = tmp_path
     database_path = project / "wildlife_ai.db"
-    taxonomy_path = project / "taxonomy.csv"
-    taxonomy_path.write_text(
-        "source_taxon_id,accepted_scientific_name,accepted_common_name,rank,taxonomic_status\n"
-        "cat,Felis catus,Domestic Cat,species,accepted\n",
-        encoding="utf-8",
-    )
-    import_taxonomy_csv(
-        taxonomy_path,
-        database_path,
-        source_namespace="test-fixture",
-        release="fixture-1",
-        license="fixture licence",
-        attribution="Synthetic unit-test row",
-    )
-    connection = connect_database(database_path)
-    try:
-        taxon_id = connection.execute(
-            "SELECT taxon_version_id FROM taxa WHERE source_taxon_id = 'cat'"
-        ).fetchone()[0]
-    finally:
-        connection.close()
-
     protected_manifest = project / "data" / "manifests" / "supported.csv"
     protected_manifest.parent.mkdir(parents=True, exist_ok=True)
     test_image_path = project / "data" / "raw" / "Cat" / "frozen-test.jpg"
     test_image_path.parent.mkdir(parents=True, exist_ok=True)
-    test_image_path.write_bytes(_image_bytes((88, 99, 111)))
+    frozen_test_image = _image_bytes((88, 99, 111))
+    test_image_path.write_bytes(frozen_test_image)
+    test_hash = hashlib.sha256(frozen_test_image).hexdigest()
     protected_manifest.write_text(
         "image_status,split,sha256,relative_path,label,image_id,duplicate_group\n"
-        "valid,test,"
-        + ("a" * 64)
-        + ",Cat/frozen-test.jpg,Domestic Cat,test-image,"
-        + ("a" * 64)
-        + "\n",
+        f"valid,test,{test_hash},Cat/frozen-test.jpg,Domestic Cat,test-image,{test_hash}\n",
         encoding="utf-8",
     )
-    return database_path, protected_manifest, taxon_id
+    return database_path, protected_manifest
 
 
 def _submit_verified_feedback(
     project: Path,
     database_path: Path,
-    taxon_id: str,
     *,
     image: bytes | None = None,
 ) -> tuple[str, bytes]:
@@ -85,11 +59,9 @@ def _submit_verified_feedback(
         project / "data" / "feedback" / "images",
         response="no",
         predicted_label="Domestic Dog",
+        corrected_label="Domestic Cat",
         model_version_id=None,
         model_score=0.82,
-        original_typed_name="Domestic Cat",
-        resolved_taxon_version_id=taxon_id,
-        resolver_method="exact",
         image_bytes=image,
         retention_consent=True,
         training_use_consent=True,
@@ -110,7 +82,8 @@ def _submit_verified_feedback(
 
 
 def test_feedback_consent_controls_retention_and_validates_upload(tmp_path: Path) -> None:
-    database_path, _, taxon_id = _setup_project(tmp_path)
+    database_path, _ = _setup_project(tmp_path)
+    upload = _image_bytes()
     no_consent_id = submit_feedback(
         database_path,
         tmp_path / "data" / "feedback" / "images",
@@ -118,18 +91,26 @@ def test_feedback_consent_controls_retention_and_validates_upload(tmp_path: Path
         predicted_label="Lion",
         model_version_id=None,
         model_score=None,
-        resolved_taxon_version_id=taxon_id,
-        image_bytes=_image_bytes(),
+        image_bytes=upload,
         retention_consent=False,
         training_use_consent=False,
     )
     connection = connect_database(database_path)
     try:
         record = connection.execute(
-            "SELECT retention_consent, training_use_consent FROM feedback WHERE feedback_id = ?",
+            """SELECT retention_consent, training_use_consent, image_sha256,
+                      corrected_label, submitted_at
+               FROM feedback WHERE feedback_id = ?""",
             (no_consent_id,),
         ).fetchone()
-        assert tuple(record) == (0, 0)
+        assert tuple(record) == (
+            0,
+            0,
+            hashlib.sha256(upload).hexdigest(),
+            "",
+            record["submitted_at"],
+        )
+        assert record["submitted_at"]
         assert connection.execute("SELECT COUNT(*) FROM feedback_images").fetchone()[0] == 0
     finally:
         connection.close()
@@ -160,9 +141,118 @@ def test_feedback_consent_controls_retention_and_validates_upload(tmp_path: Path
         )
 
 
+def test_correct_and_incorrect_responses_store_direct_supported_labels(tmp_path: Path) -> None:
+    database_path, _ = _setup_project(tmp_path)
+    image = _image_bytes()
+    correct_id = submit_feedback(
+        database_path,
+        tmp_path / "data" / "feedback" / "images",
+        response="yes",
+        predicted_label="Gray wolf",
+        model_version_id=None,
+        model_score=0.91,
+        image_bytes=image,
+    )
+    with pytest.raises(ValueError, match="requires a supported corrected label"):
+        submit_feedback(
+            database_path,
+            tmp_path / "data" / "feedback" / "images",
+            response="no",
+            predicted_label="Lion",
+            model_version_id=None,
+            model_score=0.8,
+            image_bytes=image,
+        )
+    with pytest.raises(ValueError, match="different label"):
+        submit_feedback(
+            database_path,
+            tmp_path / "data" / "feedback" / "images",
+            response="no",
+            predicted_label="Lion",
+            corrected_label="Lion",
+            model_version_id=None,
+            model_score=0.8,
+            image_bytes=image,
+        )
+    correction_id = submit_feedback(
+        database_path,
+        tmp_path / "data" / "feedback" / "images",
+        response="no",
+        predicted_label="Lion",
+        corrected_label="Gray wolf",
+        model_version_id=None,
+        model_score=0.8,
+        image_bytes=image,
+    )
+    connection = connect_database(database_path)
+    try:
+        rows = connection.execute(
+            """SELECT response, predicted_label, corrected_label, model_version_id,
+                      image_sha256, verification_status
+               FROM feedback WHERE feedback_id IN (?, ?) ORDER BY response""",
+            (correct_id, correction_id),
+        ).fetchall()
+    finally:
+        connection.close()
+    assert tuple(rows[0]) == (
+        "no",
+        "Lion",
+        "Gray wolf",
+        None,
+        hashlib.sha256(image).hexdigest(),
+        "pending",
+    )
+    assert tuple(rows[1]) == (
+        "yes",
+        "Gray wolf",
+        "Gray wolf",
+        None,
+        hashlib.sha256(image).hexdigest(),
+        "pending",
+    )
+
+
+def test_review_rejects_unverified_labels_and_rejected_items_are_ineligible(
+    tmp_path: Path,
+) -> None:
+    database_path, protected_manifest = _setup_project(tmp_path)
+    feedback_id = submit_feedback(
+        database_path,
+        tmp_path / "data" / "feedback" / "images",
+        response="no",
+        predicted_label="Lion",
+        corrected_label="Domestic Cat",
+        model_version_id=None,
+        model_score=0.7,
+        image_bytes=_image_bytes(),
+        retention_consent=True,
+        training_use_consent=True,
+    )
+    with pytest.raises(ValueError, match="supported corrected label"):
+        review_feedback(
+            database_path,
+            feedback_id,
+            decision="verified",
+            corrected_label="not an animal",
+        )
+    review_feedback(
+        database_path,
+        feedback_id,
+        decision="rejected",
+        notes="Correction could not be substantiated",
+    )
+    eligibility = check_training_eligibility(
+        database_path,
+        feedback_id,
+        protected_test_manifest=protected_manifest,
+    )
+    assert not eligibility["eligible"]
+    assert "label_not_verified" in eligibility["reasons"]
+
+
 def test_review_and_curation_export_are_eligible_and_loader_compatible(tmp_path: Path) -> None:
-    database_path, protected_manifest, taxon_id = _setup_project(tmp_path)
-    feedback_id, _ = _submit_verified_feedback(tmp_path, database_path, taxon_id)
+    database_path, protected_manifest = _setup_project(tmp_path)
+    feedback_id, _ = _submit_verified_feedback(tmp_path, database_path)
     eligibility = check_training_eligibility(
         database_path, feedback_id, protected_test_manifest=protected_manifest
     )
@@ -215,13 +305,13 @@ def test_review_and_curation_export_are_eligible_and_loader_compatible(tmp_path:
 
 
 def test_duplicate_and_frozen_test_images_are_not_curation_eligible(tmp_path: Path) -> None:
-    database_path, protected_manifest, taxon_id = _setup_project(tmp_path)
+    database_path, protected_manifest = _setup_project(tmp_path)
     shared_image = _image_bytes()
     first_id, _ = _submit_verified_feedback(
-        tmp_path, database_path, taxon_id, image=shared_image
+        tmp_path, database_path, image=shared_image
     )
     duplicate_id, _ = _submit_verified_feedback(
-        tmp_path, database_path, taxon_id, image=shared_image
+        tmp_path, database_path, image=shared_image
     )
     duplicate_result = check_training_eligibility(
         database_path, duplicate_id, protected_test_manifest=protected_manifest
@@ -229,6 +319,7 @@ def test_duplicate_and_frozen_test_images_are_not_curation_eligible(tmp_path: Pa
     assert "duplicate_feedback_image" in duplicate_result["reasons"]
 
     manifest_hash = hashlib.sha256(shared_image).hexdigest()
+    (tmp_path / "data" / "raw" / "Cat" / "frozen-test.jpg").write_bytes(shared_image)
     protected_manifest.write_text(
         "image_status,split,sha256,relative_path,label,image_id,duplicate_group\n"
         f"valid,test,{manifest_hash},Cat/frozen-test.jpg,Domestic Cat,test-image,{manifest_hash}\n",
@@ -248,8 +339,8 @@ def test_duplicate_and_frozen_test_images_are_not_curation_eligible(tmp_path: Pa
 
 
 def test_withdrawal_removes_image_and_invalidates_curation(tmp_path: Path) -> None:
-    database_path, protected_manifest, taxon_id = _setup_project(tmp_path)
-    feedback_id, _ = _submit_verified_feedback(tmp_path, database_path, taxon_id)
+    database_path, protected_manifest = _setup_project(tmp_path)
+    feedback_id, _ = _submit_verified_feedback(tmp_path, database_path)
     destination = tmp_path / "data" / "manifests" / "curated.csv"
     export_curated_manifest(
         database_path,
@@ -283,8 +374,8 @@ def test_withdrawal_removes_image_and_invalidates_curation(tmp_path: Path) -> No
 def test_training_consent_can_be_withdrawn_without_deleting_retained_image(
     tmp_path: Path,
 ) -> None:
-    database_path, protected_manifest, taxon_id = _setup_project(tmp_path)
-    feedback_id, _ = _submit_verified_feedback(tmp_path, database_path, taxon_id)
+    database_path, protected_manifest = _setup_project(tmp_path)
+    feedback_id, _ = _submit_verified_feedback(tmp_path, database_path)
     affected = withdraw_training_consent(database_path, feedback_id)
     assert affected["affected_manifests"] == []
     connection = connect_database(database_path)

@@ -64,6 +64,7 @@ class ManifestImageDataset(Dataset):
         self.raw_root = Path(raw_root).resolve()
         self.transform = transform
         self.samples: list[tuple[Path, int]] = []
+        self.feedback_flags: list[bool] = []
         class_indices = {label: index for index, label in enumerate(SUPPORTED_CLASSES)}
         manifest = Path(manifest_path)
         with manifest.open(newline="", encoding="utf-8") as stream:
@@ -83,6 +84,7 @@ class ManifestImageDataset(Dataset):
                 if not image_path.is_relative_to(allowed_root.resolve()):
                     raise ValueError(f"Manifest image path escapes raw data root: {row['relative_path']}")
                 self.samples.append((image_path, class_indices[label]))
+                self.feedback_flags.append(bool(row.get("feedback_id")))
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -104,15 +106,19 @@ def make_data_loader(
     num_workers: int,
     device: str,
     seed: int,
+    sampler=None,
 ) -> DataLoader:
     import torch
 
+    if sampler is not None and shuffle:
+        raise ValueError("A data-loader sampler cannot be combined with shuffle=True")
     generator = torch.Generator()
     generator.manual_seed(seed)
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
+        sampler=sampler,
         num_workers=num_workers,
         pin_memory=device.startswith("cuda"),
         generator=generator,

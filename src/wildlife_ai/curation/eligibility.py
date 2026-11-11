@@ -52,19 +52,39 @@ def _read_base_manifest(manifest_path: str | Path) -> tuple[list[str], list[dict
         return list(reader.fieldnames), list(reader)
 
 
+def _verify_base_manifest_files(
+    project_root: Path,
+    rows: list[dict[str, str]],
+) -> None:
+    raw_root = (project_root / "data" / "raw").resolve()
+    if not raw_root.is_dir():
+        raise FileNotFoundError(f"Frozen supported dataset directory is required: {raw_root}")
+    for row in rows:
+        if row.get("image_status") != "valid":
+            continue
+        image_path = (raw_root / row["relative_path"]).resolve()
+        if not image_path.is_relative_to(raw_root):
+            raise ValueError(f"Frozen dataset path escapes data/raw: {row['relative_path']}")
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Frozen dataset image is missing: {image_path}")
+        expected_hash = row.get("sha256", "")
+        actual_hash = hashlib.sha256(image_path.read_bytes()).hexdigest()
+        if expected_hash and actual_hash != expected_hash:
+            raise ValueError(f"Frozen dataset image hash mismatch: {row['relative_path']}")
+
+
 def _eligibility_row(
     connection,
     feedback_id: str,
     project_root: Path,
 ) -> tuple[dict[str, object], list[str]]:
     row = connection.execute(
-        """SELECT f.feedback_id, f.verification_status, f.resolved_taxon_version_id,
+        """SELECT f.feedback_id, f.response, f.predicted_label, f.corrected_label,
+                  f.image_sha256 AS upload_sha256, f.verification_status,
                   f.retention_consent, f.training_use_consent, f.duplicate_of_feedback_id,
-                  i.relative_path, i.sha256, i.upload_sha256, i.source, i.license,
-                  i.attribution, i.rights_review_status, i.quality_review_status, i.withdrawn_at,
-                  COALESCE(NULLIF(t.accepted_common_name, ''), t.accepted_scientific_name) AS target_label
+                  i.relative_path, i.sha256, i.source, i.license,
+                  i.attribution, i.rights_review_status, i.quality_review_status, i.withdrawn_at
            FROM feedback f LEFT JOIN feedback_images i ON i.feedback_id = f.feedback_id
-           LEFT JOIN taxa t ON t.taxon_version_id = f.resolved_taxon_version_id
            WHERE f.feedback_id = ?""",
         (feedback_id,),
     ).fetchone()
@@ -74,10 +94,12 @@ def _eligibility_row(
     reasons = []
     if item["verification_status"] != "verified":
         reasons.append("label_not_verified")
-    if not item["resolved_taxon_version_id"]:
-        reasons.append("canonical_taxon_not_selected")
-    if item["target_label"] not in SUPPORTED_CLASSES:
-        reasons.append("canonical_taxon_not_mapped_to_supported_class")
+    if item["corrected_label"] not in SUPPORTED_CLASSES:
+        reasons.append("corrected_label_not_supported")
+    if item["response"] == "yes" and item["corrected_label"] != item["predicted_label"]:
+        reasons.append("confirmed_label_mismatch")
+    if item["response"] == "no" and item["corrected_label"] == item["predicted_label"]:
+        reasons.append("correction_does_not_change_prediction")
     if not item["retention_consent"]:
         reasons.append("image_retention_not_consented")
     if not item["training_use_consent"]:
@@ -90,10 +112,6 @@ def _eligibility_row(
             reasons.append("retained_image_path_unsafe")
         elif not image_path.is_file():
             reasons.append("retained_image_file_missing")
-    if not item["source"] or not item["license"]:
-        reasons.append("source_or_license_missing")
-    if item["rights_review_status"] != "approved":
-        reasons.append("source_and_license_not_reviewed")
     if item["quality_review_status"] != "approved":
         reasons.append("image_quality_not_reviewed")
     if item["duplicate_of_feedback_id"]:
@@ -108,18 +126,19 @@ def check_training_eligibility(
     protected_test_manifest: str | Path,
 ) -> dict[str, object]:
     protected_hashes = _protected_test_hashes(protected_test_manifest)
+    _, base_rows = _read_base_manifest(protected_test_manifest)
+    project_root = Path(database_path).resolve().parent
+    _verify_base_manifest_files(project_root, base_rows)
     existing_hashes = _existing_dataset_hashes(protected_test_manifest)
     connection = connect_database(database_path)
     try:
         item, reasons = _eligibility_row(
-            connection, feedback_id, Path(database_path).resolve().parent
+            connection, feedback_id, project_root
         )
-        if (
-            item.get("sha256") in protected_hashes
-            or item.get("upload_sha256") in protected_hashes
-        ):
+        item_hashes = {item.get("sha256"), item.get("upload_sha256")}
+        if item_hashes & protected_hashes:
             reasons.append("image_hash_overlaps_frozen_test")
-        if item.get("upload_sha256") in existing_hashes:
+        if item_hashes & existing_hashes:
             reasons.append("image_hash_overlaps_existing_supported_dataset")
         return {"feedback_id": feedback_id, "eligible": not reasons, "reasons": reasons}
     finally:
@@ -133,46 +152,99 @@ def validate_training_manifest_consent(
     path = Path(manifest_path)
     with path.open(newline="", encoding="utf-8") as stream:
         reader = csv.DictReader(stream)
-        has_feedback_ids = bool(
-            reader.fieldnames
-            and "feedback_id" in reader.fieldnames
-            and any(row.get("feedback_id") for row in reader)
-        )
+        manifest_rows = list(reader)
+        has_feedback_ids = any(row.get("feedback_id") for row in manifest_rows)
     manifest_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    project_root = Path(database_path).resolve().parent
+    raw_root = (project_root / "data" / "raw").resolve()
+    feedback_rows = {
+        row["feedback_id"]: row for row in manifest_rows if row.get("feedback_id")
+    }
+    for row in manifest_rows:
+        if row.get("image_status") != "valid":
+            continue
+        relative = Path(row["relative_path"])
+        if row.get("feedback_id"):
+            image_path = (project_root / relative).resolve()
+            allowed_root = (project_root / "data" / "feedback").resolve()
+        else:
+            image_path = (raw_root / relative).resolve()
+            allowed_root = raw_root
+        if not image_path.is_relative_to(allowed_root):
+            raise ValueError(f"Training manifest image path escapes its data directory: {relative}")
+        if not image_path.is_file():
+            if row.get("feedback_id"):
+                raise ValueError(
+                    "Curated training manifest contains feedback with withdrawn or missing consent/image"
+                )
+            raise FileNotFoundError(f"Training manifest image is missing: {image_path}")
+        expected_hash = row.get("sha256", "")
+        if expected_hash and hashlib.sha256(image_path.read_bytes()).hexdigest() != expected_hash:
+            raise ValueError(f"Training manifest image hash mismatch: {relative}")
+        if row.get("feedback_id") and row.get("split") == "test":
+            raise ValueError("Curated feedback must never be assigned to the frozen test split")
     connection = connect_database(database_path)
     try:
         manifest = connection.execute(
             """SELECT dataset_manifest_id FROM dataset_manifests
-               WHERE manifest_sha256 = ? AND purpose = 'curated_feedback'""",
+               WHERE manifest_sha256 = ?
+                 AND purpose IN ('curated_feedback', 'automatic_feedback')""",
             (manifest_hash,),
         ).fetchone()
         if manifest is None:
             if has_feedback_ids:
                 raise ValueError("Curated feedback manifest is missing from the consent registry")
             return
+        manifest_record = connection.execute(
+            """SELECT dataset_manifest_id, purpose FROM dataset_manifests
+               WHERE manifest_sha256 = ?
+                AND purpose IN ('curated_feedback', 'automatic_feedback')""",
+            (manifest_hash,),
+        ).fetchone()
         rows = connection.execute(
-            """SELECT di.feedback_id, di.consent_training, f.training_use_consent,
-                      f.retention_consent, i.withdrawn_at, i.relative_path
+            """SELECT di.feedback_id, di.consent_training, di.relative_path,
+                      di.sha256, di.split, f.training_use_consent,
+                      f.retention_consent, f.verification_status, f.response,
+                      f.training_use_withdrawn_at, f.retention_withdrawn_at,
+                      f.corrected_label,
+                      i.sha256 AS retained_sha256, i.withdrawn_at, i.relative_path AS image_path
                FROM dataset_items di
                LEFT JOIN feedback f ON f.feedback_id = di.feedback_id
                LEFT JOIN feedback_images i ON i.feedback_id = di.feedback_id
                WHERE di.dataset_manifest_id = ?""",
-            (manifest["dataset_manifest_id"],),
+            (manifest_record["dataset_manifest_id"],),
         ).fetchall()
         for row in rows:
             if row["feedback_id"] is None:
                 continue
+            manifest_row = feedback_rows.get(str(row["feedback_id"]))
             image_path = (
-                Path(database_path).resolve().parent / str(row["relative_path"] or "")
+                project_root / str(row["image_path"] or "")
             ).resolve()
-            project_root = Path(database_path).resolve().parent
+            if manifest_row is None:
+                raise ValueError("Registered curated manifest is missing a feedback row")
             if (
                 not row["consent_training"]
                 or not row["training_use_consent"]
                 or not row["retention_consent"]
+                or row["training_use_withdrawn_at"]
+                or row["retention_withdrawn_at"]
+                or (
+                    manifest_record["purpose"] == "curated_feedback"
+                    and row["verification_status"] != "verified"
+                )
+                or (
+                    manifest_record["purpose"] == "automatic_feedback"
+                    and row["response"] not in {"yes", "no"}
+                )
+                or row["corrected_label"] not in SUPPORTED_CLASSES
+                or manifest_row.get("label") != row["corrected_label"]
+                or manifest_row.get("sha256") != row["sha256"]
+                or row["split"] == "test"
                 or row["withdrawn_at"]
                 or not image_path.is_relative_to(project_root)
                 or not image_path.is_file()
+                or row["retained_sha256"] != row["sha256"]
             ):
                 raise ValueError(
                     "Curated training manifest contains feedback with withdrawn or missing consent/image"
@@ -196,6 +268,8 @@ def export_curated_manifest(
     protected_hashes = _protected_test_hashes(protected_test_manifest)
     existing_hashes = _existing_dataset_hashes(protected_test_manifest)
     base_fields, base_rows = _read_base_manifest(protected_test_manifest)
+    project_root = Path(database_path).resolve().parent
+    _verify_base_manifest_files(project_root, base_rows)
     fields = list(
         dict.fromkeys(
             [
@@ -218,14 +292,12 @@ def export_curated_manifest(
         items = []
         for feedback_id in feedback_ids:
             item, reasons = _eligibility_row(
-                connection, feedback_id, Path(database_path).resolve().parent
+                connection, feedback_id, project_root
             )
-            if (
-                item.get("sha256") in protected_hashes
-                or item.get("upload_sha256") in protected_hashes
-            ):
+            item_hashes = {item.get("sha256"), item.get("upload_sha256")}
+            if item_hashes & protected_hashes:
                 reasons.append("image_hash_overlaps_frozen_test")
-            if item.get("upload_sha256") in existing_hashes:
+            if item_hashes & existing_hashes:
                 reasons.append("image_hash_overlaps_existing_supported_dataset")
             if reasons:
                 raise ValueError(f"Feedback {feedback_id} is ineligible: {', '.join(reasons)}")
@@ -268,10 +340,10 @@ def export_curated_manifest(
                         "image_status": "valid",
                         "width": width,
                         "height": height,
-                        "label": item["target_label"],
+                        "label": item["corrected_label"],
                         "duplicate_group": item["sha256"],
-                        "canonical_taxon_version_id": item["resolved_taxon_version_id"],
-                        "canonical_taxon_id": item["resolved_taxon_version_id"],
+                        "canonical_taxon_version_id": "",
+                        "canonical_taxon_id": "",
                         "source": item["source"],
                         "license": item["license"],
                         "attribution": item["attribution"],
@@ -341,7 +413,7 @@ def export_curated_manifest(
                             row["relative_path"],
                             row["sha256"],
                             row["duplicate_group"],
-                            row["canonical_taxon_version_id"],
+                            row["canonical_taxon_version_id"] or None,
                             row["source"],
                             row["license"],
                             row["split"],

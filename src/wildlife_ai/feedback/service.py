@@ -19,6 +19,7 @@ def submit_feedback(
     *,
     response: str,
     predicted_label: str,
+    corrected_label: str | None = None,
     model_version_id: str | None,
     model_score: float | None,
     original_typed_name: str = "",
@@ -35,24 +36,34 @@ def submit_feedback(
         raise ValueError(f"Unsupported feedback response: {response}")
     if predicted_label not in SUPPORTED_CLASSES:
         raise ValueError(f"Unsupported predicted label: {predicted_label}")
+    if response == "yes":
+        if corrected_label is None:
+            corrected_label = predicted_label
+        if corrected_label != predicted_label:
+            raise ValueError("A correct prediction must retain the predicted label")
+    elif response == "no":
+        if corrected_label not in SUPPORTED_CLASSES:
+            raise ValueError("An incorrect prediction requires a supported corrected label")
+        if corrected_label == predicted_label:
+            raise ValueError("An incorrect prediction must be corrected to a different label")
+    elif corrected_label is not None and corrected_label not in SUPPORTED_CLASSES:
+        raise ValueError(f"Unsupported corrected label: {corrected_label}")
+    if image_bytes is None:
+        raise ValueError("The uploaded image is required to preserve its SHA-256 hash")
     if model_score is not None and not 0 <= model_score <= 1:
         raise ValueError("model_score must be between 0 and 1")
     if training_use_consent and not retention_consent:
         raise ValueError("Training-use consent requires separate image-retention consent")
     if retention_consent and image_bytes is None:
         raise ValueError("An image is required when retention consent is given")
-    if not retention_consent and image_bytes is not None:
-        image_bytes = None
-
     feedback_id = str(uuid.uuid4())
     image_path: Path | None = None
     sanitized_image: bytes | None = None
     image_hash: str | None = None
-    upload_hash: str | None = None
+    upload_hash = hashlib.sha256(image_bytes).hexdigest()
     if retention_consent:
-        sanitized_image = sanitize_image(image_bytes or b"")
+        sanitized_image = sanitize_image(image_bytes)
         image_hash = hashlib.sha256(sanitized_image).hexdigest()
-        upload_hash = hashlib.sha256(image_bytes or b"").hexdigest()
         image_path = Path(image_storage_dir).resolve() / f"{feedback_id}.png"
         try:
             relative_image_path = image_path.relative_to(
@@ -74,15 +85,18 @@ def submit_feedback(
         with connection:
             connection.execute(
                 """INSERT INTO feedback
-                   (feedback_id, response, predicted_label, model_version_id, model_score,
+                   (feedback_id, response, predicted_label, corrected_label, image_sha256,
+                    model_version_id, model_score,
                     original_typed_name, resolved_taxon_version_id, resolver_method,
                     duplicate_of_feedback_id, retention_consent, retention_consent_at,
                     training_use_consent, training_use_consent_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     feedback_id,
                     response,
                     predicted_label,
+                    corrected_label or "",
+                    upload_hash,
                     model_version_id,
                     model_score,
                     original_typed_name,
@@ -154,6 +168,7 @@ def review_feedback(
     feedback_id: str,
     *,
     decision: str,
+    corrected_label: str | None = None,
     reviewer_reference: str = "",
     notes: str = "",
     resolved_taxon_version_id: str | None = None,
@@ -166,7 +181,8 @@ def review_feedback(
     try:
         with connection:
             row = connection.execute(
-                "SELECT verification_status FROM feedback WHERE feedback_id = ?",
+                """SELECT verification_status, response, predicted_label, corrected_label
+                   FROM feedback WHERE feedback_id = ?""",
                 (feedback_id,),
             ).fetchone()
             if row is None:
@@ -174,15 +190,27 @@ def review_feedback(
             previous = row["verification_status"]
             if previous not in {"pending", "needs_review", "verified"}:
                 raise ValueError(f"Feedback in {previous!r} state cannot be reviewed again")
+            label = corrected_label or row["corrected_label"]
+            if corrected_label is not None and corrected_label not in SUPPORTED_CLASSES:
+                raise ValueError(f"Unsupported corrected label: {corrected_label}")
+            if decision == "verified":
+                if row["response"] not in {"yes", "no"}:
+                    raise ValueError("Only a correct or incorrect class response can be verified")
+                if label not in SUPPORTED_CLASSES:
+                    raise ValueError("A supported corrected label is required before verification")
+                if row["response"] == "yes" and label != row["predicted_label"]:
+                    raise ValueError("A confirmed prediction must match the predicted label")
+                if row["response"] == "no" and label == row["predicted_label"]:
+                    raise ValueError("An incorrect prediction must have a different corrected label")
             if rights_approved:
                 image = connection.execute(
-                    """SELECT source, license FROM feedback_images
+                    """SELECT 1 FROM feedback_images
                        WHERE feedback_id = ? AND withdrawn_at IS NULL""",
                     (feedback_id,),
                 ).fetchone()
-                if decision != "verified" or image is None or not image["source"] or not image["license"]:
+                if decision != "verified" or image is None:
                     raise ValueError(
-                        "Rights approval requires verified feedback with a retained image, source, and licence"
+                        "Rights approval requires verified feedback with a retained image"
                     )
                 connection.execute(
                     """UPDATE feedback_images SET rights_review_status = 'approved'
@@ -206,9 +234,10 @@ def review_feedback(
                 )
             connection.execute(
                 """UPDATE feedback SET verification_status = ?,
+                   corrected_label = ?,
                    resolved_taxon_version_id = COALESCE(?, resolved_taxon_version_id)
                    WHERE feedback_id = ?""",
-                (decision, resolved_taxon_version_id, feedback_id),
+                (decision, label or "", resolved_taxon_version_id, feedback_id),
             )
             connection.execute(
                 """INSERT INTO reviews

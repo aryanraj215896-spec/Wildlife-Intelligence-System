@@ -220,14 +220,12 @@ Do not turn `Other`, `Unknown`, or `Unsupported` into a normal animal training c
 3. The application validates and previews the image.
 4. The active model runs local inference.
 5. The application displays either a supported prediction or an uncertainty/unsupported result.
-6. The application asks whether the identification is correct.
-7. The user can confirm, reject, or indicate uncertainty.
-8. If rejected, the user can search for the correct animal in the taxonomy catalogue.
-9. The name resolver presents a canonical result or ranked suggestions.
-10. The user confirms the intended animal record.
-11. The feedback is stored with a pending verification status, subject to the user's consent to retain the image.
-12. A reviewer can inspect the feedback and either verify, reject, or request more information.
-13. Verified records become eligible for curated dataset inclusion. They are not automatically used for training.
+6. The application offers `Correct` and `Incorrect` feedback.
+7. For `Correct`, the predicted class is recorded as the user's confirmed label.
+8. For `Incorrect`, the user selects the actual animal from the model's eight supported classes.
+9. The correction is stored with a pending verification status. Image-retention consent and future-training consent are requested separately; training consent requires retention consent.
+10. A reviewer can inspect the feedback and either verify, reject, or request more information.
+11. A verified, eligible correction can be included in a curated training dataset. It is not automatically used for training.
 
 ## 4.2 Prediction screen
 
@@ -238,31 +236,31 @@ The prediction screen should include:
 - A clearly named model score or estimated confidence, with explanation that it is not certainty.
 - Top three model outputs where meaningful.
 - Model version identifier.
-- Feedback controls: `Yes`, `No`, and `Not sure`.
+- Feedback controls: `Correct` and `Incorrect`. An incorrect response exposes a dropdown with exactly `Domestic Cat`, `Domestic Dog`, `Cheetah`, `Jaguar`, `Leopard`, `Lion`, `Tiger`, and `Gray Wolf`.
 - A link or button to view Grad-CAM if supported by the selected model.
 
 Do not show a fabricated percentage. If a score is displayed as a percentage, label it as a model score unless calibration has been tested. A softmax score is not automatically a calibrated probability.
 
 ## 4.3 Correct-prediction path
 
-When the user selects `Yes`:
+When the user selects `Correct`:
 
 - Store the response as user feedback, including the model version and prediction details.
+- Store the predicted class as the directly corrected/confirmed class.
 - Do not automatically treat the response as verified scientific ground truth.
 - Do not automatically add the image to the training dataset.
 - If retaining the image for review or future use, require the relevant consent and record it.
 
 ## 4.4 Incorrect-prediction path
 
-When the user selects `No`:
+When the user selects `Incorrect`:
 
-- Show a searchable animal-name field connected to the taxonomy catalogue.
-- Show supported model categories as quick selections where useful.
-- Include an `Other / Not listed` path that opens broader taxonomy search.
-- Allow the user to select a canonical taxon record.
-- Store the original typed string and the selected canonical taxon identifier.
-- Ask the user to confirm the resolved animal before submission.
-- Permit `I don't know` or cancellation; do not force a guessed label.
+- Show a dropdown containing exactly the model's eight supported display classes: `Domestic Cat`, `Domestic Dog`, `Cheetah`, `Jaguar`, `Leopard`, `Lion`, `Tiger`, and `Gray Wolf`.
+- Store the selected class directly as the corrected label, separately from the original prediction.
+- Do not require an external taxonomy database, taxonomy identifier, or scientific-name lookup for this correction.
+- Keep any taxonomy search as a separate reference workflow; it does not determine the classifier's corrected class.
+
+The display option `Gray Wolf` maps to the existing internal class label `Gray wolf` so current checkpoints and manifests remain compatible.
 
 ## 4.5 Unknown or unsupported prediction path
 
@@ -665,12 +663,10 @@ The feedback system collects possible corrections from users. It does not make e
 
 Store at least:
 
-- User confirmed the displayed prediction.
-- User rejected the displayed prediction and supplied a correction.
-- User was unsure or did not provide a correction.
-- User reported an unsupported/unknown animal.
+- User confirmed the displayed prediction (`Correct`).
+- User rejected the displayed prediction and selected one of the model's eight classes (`Incorrect`).
 
-Keep positive confirmations separate from verified labels. A user selecting `Yes` is useful feedback, but it is not automatically an expert-verified ground-truth annotation.
+Keep positive confirmations separate from verified labels. A user selecting `Correct` is useful feedback, but it is not automatically an expert-verified ground-truth annotation.
 
 ## 9.3 Feedback record
 
@@ -678,13 +674,11 @@ A feedback record should contain fields equivalent to:
 
 - Feedback identifier.
 - Image reference, if retention consent was given.
-- Original prediction label and taxonomy identifier.
+- Original prediction label.
+- Corrected class label selected directly from the model's eight supported classes (equal to the predicted class for a positive confirmation).
 - Original model score and score type.
 - Model version used for prediction.
-- User response (`yes`, `no`, `unsure`, or equivalent).
-- Original free-text animal name, if entered.
-- Resolved taxonomy identifier, if selected.
-- Name-resolution method and candidate score, if applicable.
+- User response (`yes`/`no` or equivalent).
 - Verification status.
 - Submission timestamp.
 - Consent state and timestamp.
@@ -713,7 +707,7 @@ The local MVP should include a simple administrator/reviewer workflow to:
 
 - View the image, if it was retained with consent.
 - View the original model output and model version.
-- View the user's proposed animal and taxonomy record.
+- View the user's directly selected corrected class.
 - Inspect source or supporting notes where available.
 - Accept the correction, reject it, or mark it as needing further review.
 - Record reviewer action and timestamp.
@@ -772,10 +766,10 @@ One image or one user correction is never enough to establish reliable support f
 
 ## 10.3 Training data eligibility
 
-Before an image can enter a training run, verify:
+Before a supported-class feedback image can enter a training run, verify:
 
 - It has explicit retention/training consent where required.
-- It has an accepted canonical taxon mapping.
+- Its directly selected corrected class is one of the model's eight supported classes; taxonomy lookup is not required.
 - Its label has been verified.
 - It is not corrupted or unusable.
 - It is not an exact or near duplicate of another selected example, unless deliberately retained for a documented reason.
@@ -1212,11 +1206,12 @@ Exit criteria:
 
 Deliverables:
 - Feedback storage.
-- Yes/No/Not sure workflow.
-- Correction selection through taxonomy search.
+- Correct/Incorrect workflow with direct correction selection from the eight model classes.
+- Candidate-demo feedback linked to the predicting model version without changing its lifecycle state.
 - Pending/corroborated/verified/rejected/needs-review states.
 - Reviewer interface or workflow.
-- Consent and image-retention checks.
+- Separate image-retention and future-training consent checks.
+- Curated verified corrections assigned only to train or validation.
 
 Exit criteria:
 - Unverified feedback cannot enter a training manifest.
@@ -1299,11 +1294,13 @@ The MVP is considered functionally complete only when all applicable criteria be
 ### Feedback
 
 - [ ] The application asks for feedback after prediction.
-- [ ] A correction can be selected from the taxonomy catalogue.
-- [ ] Original prediction, model version, typed correction, and canonical taxon are retained as separate fields.
+- [ ] An incorrect prediction can be corrected by selecting directly from the eight model classes, without a taxonomy import or lookup.
+- [ ] Original prediction, corrected class, model version, score, submission time, and verification status are retained as separate feedback data.
 - [ ] Unverified corrections remain outside the training dataset.
 - [ ] A reviewer can verify, reject, or request further review.
 - [ ] Image retention for feedback is consent-based.
+- [ ] Verified eligible corrections enter only train or validation, never the frozen test split.
+- [ ] Candidate-demo feedback is linked to its candidate model version and does not change model lifecycle state.
 
 ### Application
 
@@ -1419,7 +1416,7 @@ The intended logical flow is:
       ACTIVE MODEL
 ```
 
-The taxonomy catalogue is a separate reference service used by the correction and search workflows. It does not itself perform image recognition and does not automatically add output classes to the model.
+The taxonomy catalogue is a separate reference service for animal-name lookup and unsupported-animal research. It does not determine direct corrections among the model's eight classes, perform image recognition, or automatically add output classes to the model.
 
 ---
 

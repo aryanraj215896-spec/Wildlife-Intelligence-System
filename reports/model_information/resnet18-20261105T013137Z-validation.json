@@ -1,0 +1,84 @@
+{
+  "model_version": "resnet18-20261105T013137Z",
+  "architecture": "resnet18",
+  "split": "validation",
+  "dataset_manifest_sha256": "c0c6e298f3a84516c2c75b8b701eab69bc55da9cce7b949238edb878add42e0d",
+  "checkpoint_sha256": "bc6cc1d43fdf8130047a224b9c2f577b467457e25990207f53b14d9a54d829c4",
+  "checkpoint_size_bytes": 44807883,
+  "sample_count": 2462,
+  "class_names": [
+    "Domestic Cat",
+    "Domestic Dog",
+    "Lion",
+    "Tiger",
+    "Leopard",
+    "Gray wolf",
+    "Cheetah",
+    "Jaguar"
+  ],
+  "metrics": {
+    "accuracy": 0.9638505280259951,
+    "macro_precision": 0.9590103450089049,
+    "macro_recall": 0.9544092893866261,
+    "macro_f1": 0.9564284251287443,
+    "sample_count": 2462
+  },
+  "per_class": [
+    {
+      "label": "Domestic Cat",
+      "precision": 0.9560439560439561,
+      "recall": 0.9775280898876404,
+      "f1": 0.9666666666666667,
+      "support": 356
+    },
+    {
+      "label": "Domestic Dog",
+      "precision": 0.9840213049267643,
+      "recall": 0.9892904953145917,
+      "f1": 0.986648865153538,
+      "support": 747
+    },
+    {
+      "label": "Lion",
+      "precision": 0.9356913183279743,
+      "recall": 0.9667774086378738,
+      "f1": 0.9509803921568627,
+      "support": 301
+    },
+    {
+      "label": "Tiger",
+      "precision": 0.9721362229102167,
+      "recall": 0.9691358024691358,
+      "f1": 0.9706336939721792,
+      "support": 324
+    },
+    {
+      "label": "Leopard",
+      "precision": 0.9242424242424242,
+      "recall": 0.905940594059406,
+      "f1": 0.915,
+      "support": 202
+    },
+    {
+      "label": "Gray wolf",
+      "precision": 0.9692307692307692,
+      "recall": 0.9356435643564357,
+      "f1": 0.9521410579345089,
+      "support": 202
+    },
+    {
+      "label": "Cheetah",
+      "precision": 0.9672131147540983,
+      "recall": 0.8984771573604061,
+      "f1": 0.931578947368421,
+      "support": 197
+    },
+    {
+      "label": "Jaguar",
+      "precision": 0.9635036496350365,
+      "recall": 0.9924812030075187,
+      "f1": 0.9777777777777779,
+      "support": 133
+    }
+  ]
+}

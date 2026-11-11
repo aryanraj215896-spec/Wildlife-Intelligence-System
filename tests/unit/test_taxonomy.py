@@ -58,10 +58,12 @@ def test_imported_taxonomy_resolves_exact_and_fuzzy_with_confirmation(
 
     assert imported["row_count"] == 1
     assert exact["method"] == "exact"
+    assert exact["requires_confirmation"] is False
+    assert exact["ambiguous"] is False
     assert exact["candidates"][0]["source_taxon_id"] == "test-hippo"
     assert fuzzy["method"] == "fuzzy"
-    assert fuzzy["candidates"][0]["accepted_common_name"] == "Hippopotamus"
     assert fuzzy["requires_confirmation"] is True
+    assert fuzzy["candidates"][0]["accepted_common_name"] == "Hippopotamus"
 
 
 def test_taxonomy_import_requires_release_metadata_and_columns(tmp_path: Path) -> None:
@@ -86,7 +88,16 @@ def test_database_migration_is_repeatable_and_enables_foreign_keys(tmp_path: Pat
     second = connect_database(database_path)
     try:
         assert second.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-        assert second.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 3
+        assert second.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 5
+        tables = {
+            row["name"]
+            for row in second.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        assert {
+            "application_model_selection",
+            "automatic_training_batches",
+            "automatic_training_batch_feedback",
+        } <= tables
     finally:
         second.close()
 
@@ -118,14 +129,18 @@ def test_feedback_schema_upgrade_adds_phase_seven_columns(tmp_path: Path) -> Non
                feedback_id TEXT PRIMARY KEY,
                verification_status TEXT NOT NULL,
                retention_consent INTEGER NOT NULL DEFAULT 0,
-               training_use_consent INTEGER NOT NULL DEFAULT 0
+               training_use_consent INTEGER NOT NULL DEFAULT 0,
+               response TEXT NOT NULL DEFAULT 'no',
+               predicted_label TEXT NOT NULL DEFAULT 'Lion'
            );
            CREATE TABLE feedback_images (
                feedback_image_id TEXT PRIMARY KEY,
                feedback_id TEXT NOT NULL,
                relative_path TEXT NOT NULL,
                sha256 TEXT NOT NULL
-           );"""
+           );
+           INSERT INTO feedback(feedback_id, verification_status)
+           VALUES ('legacy-feedback', 'pending');"""
     )
     connection.close()
 
@@ -133,7 +148,12 @@ def test_feedback_schema_upgrade_adds_phase_seven_columns(tmp_path: Path) -> Non
     try:
         assert upgraded.execute(
             "SELECT MAX(version) FROM schema_migrations"
-        ).fetchone()[0] == 3
+        ).fetchone()[0] == 5
+        legacy = upgraded.execute(
+            """SELECT feedback_id, verification_status, corrected_label, image_sha256
+               FROM feedback WHERE feedback_id = 'legacy-feedback'"""
+        ).fetchone()
+        assert tuple(legacy) == ("legacy-feedback", "pending", "", "")
         assert {
             row["name"] for row in upgraded.execute("PRAGMA table_info(feedback_images)")
         } >= {

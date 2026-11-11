@@ -66,11 +66,13 @@ def resolve_name(
         }
         for score, row in selected
     ]
+    resolved_method = method if candidates else "unresolved"
+    requires_confirmation = resolved_method != "exact" or len(candidates) != 1
     return {
         "query": query,
         "normalized_query": normalized,
-        "method": method if candidates else "unresolved",
-        "requires_confirmation": True,
-        "ambiguous": len(candidates) > 1 and method == "exact",
+        "method": resolved_method,
+        "requires_confirmation": requires_confirmation,
+        "ambiguous": len(candidates) > 1,
         "candidates": candidates,
     }

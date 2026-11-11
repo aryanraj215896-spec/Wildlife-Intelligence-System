@@ -16,6 +16,7 @@ from typing import Literal
 
 import torch
 import torch.nn as nn
+from torch.utils.data import WeightedRandomSampler
 from torchvision import __version__ as torchvision_version
 
 from wildlife_ai.config.settings import SUPPORTED_CLASSES
@@ -43,6 +44,9 @@ class TrainingConfig:
     device: Literal["auto", "cuda", "cpu"] = "auto"
     mixed_precision: bool = True
     image_size: int = 224
+    initial_checkpoint_path: Path | None = None
+    feedback_fraction: float = 0.25
+    model_version: str | None = None
 
 
 def resolve_device(requested: str) -> torch.device:
@@ -167,6 +171,10 @@ def train_model(config: TrainingConfig) -> dict[str, object]:
         raise ValueError("num_workers cannot be negative")
     if config.batch_size is not None and config.batch_size <= 0:
         raise ValueError("batch_size must be positive")
+    if not 0 < config.feedback_fraction < 1:
+        raise ValueError("feedback_fraction must be greater than 0 and less than 1")
+    if config.initial_checkpoint_path is not None and config.model_name != "resnet18":
+        raise ValueError("Warm-starting is supported only for ResNet18")
     if not config.manifest_path.is_file():
         raise FileNotFoundError(f"Dataset manifest not found: {config.manifest_path}")
     if not config.raw_root.is_dir():
@@ -206,13 +214,46 @@ def train_model(config: TrainingConfig) -> dict[str, object]:
     )
     if not train_dataset or not validation_dataset:
         raise ValueError("Training and validation splits must both contain valid images")
+    sampler = None
+    feedback_indices = [
+        index for index, is_feedback in enumerate(train_dataset.feedback_flags)
+        if is_feedback
+    ]
+    base_indices = [
+        index for index, is_feedback in enumerate(train_dataset.feedback_flags)
+        if not is_feedback
+    ]
+    if feedback_indices and base_indices:
+        weights = [0.0] * len(train_dataset)
+        cohorts = (
+            (base_indices, 1.0 - config.feedback_fraction),
+            (feedback_indices, config.feedback_fraction),
+        )
+        for indices, cohort_weight in cohorts:
+            class_counts: dict[int, int] = {}
+            for index in indices:
+                target = train_dataset.samples[index][1]
+                class_counts[target] = class_counts.get(target, 0) + 1
+            class_count = len(class_counts)
+            for index in indices:
+                target = train_dataset.samples[index][1]
+                weights[index] = cohort_weight / (
+                    class_count * class_counts[target]
+                )
+        sampler = WeightedRandomSampler(
+            weights,
+            num_samples=len(train_dataset),
+            replacement=True,
+            generator=torch.Generator().manual_seed(config.seed),
+        )
     train_loader = make_data_loader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=sampler is None,
         num_workers=config.num_workers,
         device=device.type,
         seed=config.seed,
+        sampler=sampler,
     )
     validation_loader = make_data_loader(
         validation_dataset,
@@ -224,11 +265,25 @@ def train_model(config: TrainingConfig) -> dict[str, object]:
     )
 
     pretrained = config.model_name == "resnet18"
-    model = build_model(
-        config.model_name,
-        pretrained=pretrained,
-        freeze_backbone=pretrained,
-    ).to(device)
+    if config.initial_checkpoint_path is not None:
+        from wildlife_ai.models.checkpoint import load_checkpoint
+
+        model, warm_start_metadata = load_checkpoint(
+            config.initial_checkpoint_path,
+            device=device,
+        )
+        if warm_start_metadata.get("architecture") != config.model_name:
+            raise ValueError("Warm-start checkpoint architecture does not match training model")
+        if warm_start_metadata.get("normalization") != normalization:
+            raise ValueError("Warm-start checkpoint normalization does not match training")
+        for name, parameter in model.named_parameters():
+            parameter.requires_grad = name.startswith("fc.")
+    else:
+        model = build_model(
+            config.model_name,
+            pretrained=pretrained,
+            freeze_backbone=pretrained,
+        ).to(device)
     if any(parameter.device.type != device.type for parameter in model.parameters()):
         raise RuntimeError(f"Model failed to move to selected device {device}")
     loss_function = nn.CrossEntropyLoss()
@@ -355,7 +410,8 @@ def _checkpoint_metadata(
     from torch import __version__ as torch_version
 
     return {
-        "model_version": f"{config.model_name}-{started_at.strftime('%Y%m%dT%H%M%SZ')}",
+        "model_version": config.model_version
+        or f"{config.model_name}-{started_at.strftime('%Y%m%dT%H%M%SZ')}",
         "architecture": config.model_name,
         "class_names": list(SUPPORTED_CLASSES),
         "class_to_index": {name: index for index, name in enumerate(SUPPORTED_CLASSES)},
@@ -375,7 +431,9 @@ def _checkpoint_metadata(
         "epoch": epoch,
         "validation_metrics": dict(history[-1]),
         "pretrained_weights": (
-            "Torchvision ResNet18_Weights.DEFAULT (ImageNet-1K V1)"
+            "warm-start from selected checkpoint"
+            if config.initial_checkpoint_path is not None
+            else "Torchvision ResNet18_Weights.DEFAULT (ImageNet-1K V1)"
             if config.model_name == "resnet18"
             else None
         ),
